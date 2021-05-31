@@ -239,6 +239,7 @@ def main():
             printlog("enabling pyprof profiling")
             pyprof.init()  # initializes PyProf
             profiler.start()
+        startTime = int(round(time.time() * 1000))  # time in ms
         for i in range(len(law['data'])):
             if i < skip:
                 startTime = int(round(time.time() * 1000))  # time in ms
