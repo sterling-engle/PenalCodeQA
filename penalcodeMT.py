@@ -37,16 +37,17 @@ References:
     https://stackoverflow.com/questions/58216000/get-total-amount-of-free-gpu-memory-and-available-using-pytorch
 """
 
+import multiprocessing as mp
 import torch
 import time
 import argparse  # command-line parsing library
 import json
 import string
 import re  # regular expressions
-import textstat  # calculates statistics from text such as reading level
+# import textstat  # calculates statistics from text such as reading level
 from transformers import AutoTokenizer, AutoModelForQuestionAnswering
-import torch.cuda.profiler as profiler
-import pyprof
+# import torch.cuda.profiler as profiler
+# import pyprof
 
 
 def printlog(s):
@@ -130,6 +131,87 @@ def get_gold_answers(example):
     return gold_answers
 
 
+def getAnswers(law, skip):
+    device = "cuda" if torch.cuda.is_available() else "cpu"  # [2] line 22
+    tokenizer = AutoTokenizer.from_pretrained(
+            "ktrapeznikov/albert-xlarge-v2-squad-v2")
+    model = AutoModelForQuestionAnswering.from_pretrained(
+            "ktrapeznikov/albert-xlarge-v2-squad-v2")
+    model.to(device)        # run on GPU if available
+    noAnswerCount = 0       # number of questions that have no answer
+    noAnswerCorrect = 0     # number of "no answer" questions correct
+    exactMatch = 0
+    totalF1 = 0.0
+    startTime = int(round(time.time() * 1000))  # time in ms
+    for i in range(len(law['data'])):
+        if i < skip:
+            startTime = int(round(time.time() * 1000))  # time in ms
+            continue  # skip first --skip=n questions for validating new
+        entry = law['data'][i]
+        question = entry['question']
+        if question == "QQQ":  # skip non-existant questions
+            skip += 1
+            continue
+        id = entry['id']
+        if id != i:
+            printlog(f"WARNING: ? {i} JSON ID {id} mismatch.")
+
+        context = entry['context']
+        input_dict = tokenizer.encode_plus(question, context,
+                                           return_tensors="pt")
+        tokenCount = input_dict['input_ids'].size(1)
+        if tokenCount > 512:
+            skip += 1
+            printlog(f"? {i} ERROR: context longer than 512 tokens "
+                     f"({tokenCount}) - skipped: {context}")
+            continue
+        input_dict.to(device)   # run on GPU if available
+        modelOutput = model(**input_dict)
+        start_scores = modelOutput.start_logits
+        end_scores = modelOutput.end_logits
+        input_ids = input_dict["input_ids"].tolist()
+        all_tokens = tokenizer.convert_ids_to_tokens(input_ids[0])
+        AlbertAnswer = ''.join(all_tokens[torch.argmax(start_scores):
+                                          torch.argmax(end_scores)
+                                          + 1]).replace('▁', ' ').strip()
+        if AlbertAnswer == "[CLS]":
+            AlbertAnswer = ""
+        elif AlbertAnswer[0:5] == "[CLS]":
+            sep = AlbertAnswer.find("[SEP]")
+            if sep > 4:  # remove [CLS] ... [SEP]
+                AlbertAnswer = AlbertAnswer[(sep + 5):].strip()
+        goldAnswers = [answer['text'] for answer
+                       in law['data'][i]['answers'] if answer['text']]
+        if not goldAnswers:
+            goldAnswers = ['']
+
+        em = max((compute_exact_match(AlbertAnswer, answer)) for answer
+                 in goldAnswers)
+        if em == 1:
+            exactMatch += 1
+            f1 = 1.0  # F1 always equals 1.0 for an exact match
+            totalF1 += f1
+            if goldAnswers == ['']:  # no answer was the correct answer
+                noAnswerCount += 1
+                noAnswerCorrect += 1
+            printlog(f"EM ? {i}: {question}")
+            printlog(f"ALBERT: {AlbertAnswer}")
+            # printlog(f"answer: {goldAnswers}")
+            # printlog(f"context: {context}")
+        else:  # print F1, golden answers and context when not an EM
+            f1 = max((compute_f1(AlbertAnswer, answer))
+                     for answer in goldAnswers)
+            totalF1 += f1
+            if goldAnswers == ['']:  # no answer was the correct answer
+                noAnswerCount += 1
+            printlog(f"F1 {f1} ? {i}: {question}")
+            printlog(f"ALBERT: {AlbertAnswer}")
+            printlog(f"answer: {goldAnswers}")
+            printlog(f"context: {context}")
+    return (len(law['data']) - 1), skip, noAnswerCount, noAnswerCorrect, \
+        exactMatch, totalF1, startTime
+
+
 def main():
     # argument parser
     ap = argparse.ArgumentParser()
@@ -166,7 +248,7 @@ def main():
     skip = args['skip']
     if skip > 0:
         printlog(f"   skipping the first: {skip} questions")
-
+    """
     if args['textstats']:  # calculate text statistics like reading levels
         sentences = 0
         syllables = 0
@@ -239,6 +321,7 @@ def main():
             printlog("enabling pyprof profiling")
             pyprof.init()  # initializes PyProf
             profiler.start()
+
         startTime = int(round(time.time() * 1000))  # time in ms
         for i in range(len(law['data'])):
             if i < skip:
@@ -308,28 +391,31 @@ def main():
 
         if args['pyprof']:
             profiler.stop()
-        i -= skip
-        i += 1  # first ? is index 0
-        printlog("")
-        printlog(f"{exactMatch}/{i} exact matches = "
-                 "{exactMatch / i * 100:.2f}%")
-        printlog(f"F1 = {totalF1 / i * 100:.2f}%")
-        printlog(f"{noAnswerCorrect}/{noAnswerCount} correct \"no answers\" = "
-                 f"{noAnswerCorrect / noAnswerCount * 100:.2f}%")
-        if (i - noAnswerCount) > 0:
-            printlog(f"{exactMatch - noAnswerCorrect}/{i - noAnswerCount} "
-                     "\"has answer\" exact matches = "
-                     f"{(exactMatch - noAnswerCorrect) / (i - noAnswerCount) * 100:.2f}%")
+        """
+
+    i, skip, noAnswerCount, noAnswerCorrect, exactMatch, totalF1, \
+        startTime = getAnswers(law, skip)
+    i -= skip
+    i += 1  # first ? is index 0
+    printlog("")
+    printlog(f"{exactMatch}/{i} exact matches = {exactMatch / i * 100:.2f}%")
+    printlog(f"F1 = {totalF1 / i * 100:.2f}%")
+    printlog(f"{noAnswerCorrect}/{noAnswerCount} correct \"no answers\" = "
+             f"{noAnswerCorrect / noAnswerCount * 100:.2f}%")
+    if (i - noAnswerCount) > 0:
+        printlog(f"{exactMatch - noAnswerCorrect}/{i - noAnswerCount} "
+                 "\"has answer\" exact matches = "
+                 f"{(exactMatch - noAnswerCorrect) / (i - noAnswerCount) * 100:.2f}%")
 
     if device == "cuda":
         torch.cuda.synchronize()
     elapsedTime = int(round(time.time() * 1000)) - startTime
     if args['textstats']:
         printlog(f"elapsed text statistical analysis time {elapsedTime} ms")
-        printlog(f"{elapsedTime / i / 1000:.3f} seconds per question")
+        printlog(f"{elapsedTime / i / 1000:.4f} seconds per question")
     else:
         printlog(f"elapsed answering time: {elapsedTime} ms")
-        printlog(f"{elapsedTime / i / 1000:.3f} seconds per question")
+        printlog(f"{elapsedTime / i / 1000:.4f} seconds per question")
     printMemory()
     if logFile is not None:
         logFile.close()
