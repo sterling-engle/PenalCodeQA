@@ -40,6 +40,7 @@ References:
 # import multiprocessing as mp
 import sys
 import os
+import gc  # garbage collector
 import torch
 import time
 import argparse  # command-line parsing library
@@ -231,7 +232,7 @@ def getTextStats(law, skip):
     return i, skip, startTime
 
 
-def getAnswers(lawFileName, skip, batchSize):
+def getAnswers(lawFileName, batchSize, skip, first):
     # global logFile  # output file for printlog(s)
     # logFile = open(logFileName, "a")
     # printProcessInfo("function getAnswers")
@@ -248,8 +249,8 @@ def getAnswers(lawFileName, skip, batchSize):
 
     # Can we use Cuda to run faster on a GPU or just use the slower CPU?
     device = "cuda" if torch.cuda.is_available() else "cpu"  # [2] line 22
-    # printlogFile(f"           running on: {device}")
-    # printMemory()
+    printlogFile(f"           running on: {device}")
+    printMemory()
 
     # record start time
     if device == "cuda":
@@ -266,13 +267,19 @@ def getAnswers(lawFileName, skip, batchSize):
     noAnswerCorrect = 0     # number of "no answer" questions correct
     exactMatch = 0
     totalF1 = 0.0
+    q = 1
     batchNum = 0
+    # record start time
+    if device == "cuda":
+        torch.cuda.synchronize()
     startTime = int(round(time.time() * 1000))  # time in ms
     for i in range(len(law['data'])):
         if i < skip:
             startTime = int(round(time.time() * 1000))  # time in ms
             continue  # skip first --skip=n questions for validating new
-
+        if q > first:
+            q -= 1
+            break
         entry = law['data'][i]
         question = entry['question']
         # questions = [question['text'] for question
@@ -311,44 +318,15 @@ def getAnswers(lawFileName, skip, batchSize):
         encoding.to(device)
         # start_scores, end_scores = model(**encoding)
         """
-        # start_scores, end_scores = model(input_ids,
-        #                                 attention_mask=attention_mask)
-        for index, (start_score, end_score, input_id) in \
-               enumerate(zip(start_scores, end_scores, input_ids)):
-
-            max_startscore = torch.argmax(start_score)
-            max_endscore = torch.argmax(end_score)
-            ans_tokens = input_ids[index][max_startscore: max_endscore + 1]
-            answer_tokens = tokenizer.convert_ids_to_tokens(ans_tokens,
-                                                    skip_special_tokens=True)
-            answer_tokens_to_string = \
-                tokenizer.convert_tokens_to_string(answer_tokens)
-            print("\nQuestion: ", question_context_for_batch[index][0])
-            print("Answer: ", answer_tokens_to_string)
-            
         tokenCount = input_dict['input_ids'].size(1)
         if tokenCount > 512:
             skip += 1
             printlogFile(f"? {i} ERROR: context longer than 512 tokens "
                          f"({tokenCount}) - skipped: {context}")
             continue
-        input_dict.to(device)   # run on GPU if available
+        printMemory()
         """
-        printMemory()
         modelOutput = model(**encoding)
-        printlog("after model(**encoding)")
-        printMemory()
-        del encoding
-        printlog("after del encoding")
-        printMemory()
-        torch.cuda.ipc_collect()
-        printlog("after torch.cuda.ipc_collect()")
-        printMemory()
-        with torch.no_grad():
-            if device == "cuda":
-                torch.cuda.empty_cache()
-        printlog("after clearing cache")
-        printMemory()
         start_scores = modelOutput.start_logits
         end_scores = modelOutput.end_logits
 
@@ -379,7 +357,7 @@ def getAnswers(lawFileName, skip, batchSize):
                 if answer_for_batch[b] == ['']:  # no answer was correct
                     noAnswerCount += 1
                     noAnswerCorrect += 1
-                printlogFile(f"EM ? {i}: {question}")
+                printlogFile(f"EM ? {q}: {question_context_for_batch[b][0]}")
                 printlogFile(f"ALBERT: {AlbertAnswer}")
             else:  # print F1, golden answers and context when not an EM
                 f1 = max((compute_f1(AlbertAnswer, answer))
@@ -387,10 +365,31 @@ def getAnswers(lawFileName, skip, batchSize):
                 totalF1 += f1
                 if answer_for_batch[b] == ['']:  # no answer was correct
                     noAnswerCount += 1
-                printlogFile(f"F1 {f1} ? {i}: {question}")
+                printlogFile(f"F1 {f1} ? {q}: "
+                             f"{question_context_for_batch[b][0]}")
                 printlogFile(f"ALBERT: {AlbertAnswer}")
                 printlogFile(f"answer: {answer_for_batch[b]}")
-                printlogFile(f"context: {context}")
+                printlogFile(f"context: {question_context_for_batch[b][1]}")
+            q += 1
+        """
+        printlog("after model(**encoding)")
+        printMemory()
+        del encoding
+        printlog("after del encoding")
+        printMemory()
+        del input_ids, start_scores, end_scores
+        del modelOutput
+        printlog("after del modelOutput")
+        printMemory()
+        gc.collect()
+        printlog("after gc.collect()")
+        printMemory()
+        # torch.cuda.synchronize(device)
+        with torch.no_grad():
+            if device == "cuda":
+                torch.cuda.empty_cache()
+        printlog("after clearing cache")
+        printMemory()
         # printMemory()
         # with torch.no_grad():
         #    if device == "cuda":
@@ -398,49 +397,23 @@ def getAnswers(lawFileName, skip, batchSize):
         # printlog("after clearing cache")
         # printMemory()
         """
-        goldAnswers = [answer['text'] for answer
-                       in law['data'][i]['answers'] if answer['text']]
-        if not goldAnswers:
-            goldAnswers = ['']
-
-        em = max((compute_exact_match(AlbertAnswer, answer)) for answer
-                 in goldAnswers)
-        if em == 1:
-            exactMatch += 1
-            f1 = 1.0  # F1 always equals 1.0 for an exact match
-            totalF1 += f1
-            if goldAnswers == ['']:  # no answer was the correct answer
-                noAnswerCount += 1
-                noAnswerCorrect += 1
-            printlogFile(f"EM ? {i}: {question}")
-            printlogFile(f"ALBERT: {AlbertAnswer}")
-        else:  # print F1, golden answers and context when not an EM
-            f1 = max((compute_f1(AlbertAnswer, answer))
-                     for answer in goldAnswers)
-            totalF1 += f1
-            if goldAnswers == ['']:  # no answer was the correct answer
-                noAnswerCount += 1
-            printlogFile(f"F1 {f1} ? {i}: {question}")
-            printlogFile(f"ALBERT: {AlbertAnswer}")
-            printlogFile(f"answer: {goldAnswers}")
-            printlogFile(f"context: {context}")
-        """
     elapsedTime = int(round(time.time() * 1000)) - startTime
-    i -= skip
-    i += 1  # first ? is index 0
+    # i -= skip
+    # i += 1  # first ? is index 0
     printlogFile("")
-    printlogFile(f"{exactMatch}/{i} exact matches = "
-                 f"{exactMatch / i * 100:.2f}%")
-    printlogFile(f"F1 = {totalF1 / i * 100:.2f}%")
-    printlogFile(f"{noAnswerCorrect}/{noAnswerCount} "
-                 "correct \"no answers\" = "
-                 f"{noAnswerCorrect / noAnswerCount * 100:.2f}%")
-    if (i - noAnswerCount) > 0:
-        printlogFile(f"{exactMatch - noAnswerCorrect}/{i - noAnswerCount} "
+    printlogFile(f"{exactMatch}/{q} exact matches = "
+                 f"{exactMatch / q * 100:.2f}%")
+    printlogFile(f"F1 = {totalF1 / q * 100:.2f}%")
+    if (noAnswerCount > 0):
+        printlogFile(f"{noAnswerCorrect}/{noAnswerCount} "
+                     "correct \"no answers\" = "
+                     f"{noAnswerCorrect / noAnswerCount * 100:.2f}%")
+    if (q - noAnswerCount) > 0:
+        printlogFile(f"{exactMatch - noAnswerCorrect}/{q - noAnswerCount} "
                      "\"has answer\" exact matches = "
-                     f"{(exactMatch - noAnswerCorrect) / (i - noAnswerCount) * 100:.2f}%")
+                     f"{(exactMatch - noAnswerCorrect) / (q - noAnswerCount) * 100:.2f}%")
     printlogFile(f"elapsed answering time: {elapsedTime} ms")
-    printlogFile(f"{elapsedTime / i / 1000:.4f} seconds per question")
+    printlogFile(f"{elapsedTime / q / 1000:.4f} seconds per question")
     printMemory()
     # if logFile is not None:
     #    logFile.close()
@@ -453,6 +426,7 @@ def main():
     # argument parser
     ap = argparse.ArgumentParser()
     ap.add_argument("-b", "--batch", type=int, default=1)
+    ap.add_argument("-f", "--first", type=int, default=300)
     ap.add_argument("-j", "--json", type=open, default='CalPenalCodeQA.json',
                     help="JSON file path")
     ap.add_argument("-o", "--output", type=argparse.FileType('a'),
@@ -488,11 +462,13 @@ def main():
     skip = args['skip']
     if skip > 0:
         printlog(f"   skipping the first: {skip} questions")
+    first = args['first']
+    printlog(f"  answering the first: {first} question(s)")
 
     if args['textstats']:  # calculate text statistics like reading levels
         i, skip, startTime = getTextStats(law, skip)
     else:
-        getAnswers("CalPenalCodeQA.json", skip, batchSize)
+        getAnswers("CalPenalCodeQA.json", batchSize, skip, first)
 
     # if device == "cuda":
     #    torch.cuda.synchronize()
