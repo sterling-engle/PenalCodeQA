@@ -26,7 +26,8 @@ References:
 [1] The Hugging Face Team, "transformers / examples / question-answering",
     https://github.com/huggingface/transformers/tree/master/examples/question-answering
 [2] Cloudera Fast Forward Labs, "Evaluating QA: Metrics, Predictions, and
-    the Null Response", https://qa.fastforwardlabs.com/no%20answer/null%20threshold/bert/distilbert/exact%20match/f1/robust%20predictions/2020/06/09/Evaluating_BERT_on_SQuAD.html#F1
+    the Null Response",
+    https://qa.fastforwardlabs.com/no%20answer/null%20threshold/bert/distilbert/exact%20match/f1/robust%20predictions/2020/06/09/Evaluating_BERT_on_SQuAD.html#F1
 [2] Persson, Alladin, "Useful Tensor Operations",
     https://github.com/aladdinpersson/Machine-Learning-Collection/blob/master/ML/Pytorch/Basics/pytorch_tensorbasics.py
 [3] PyTorch.org, "PyTorch Documentation",
@@ -46,7 +47,6 @@ import textstat  # calculates statistics from text such as reading level
 from transformers import AutoTokenizer, AutoModelForQuestionAnswering
 import torch.cuda.profiler as profiler
 import pyprof
-
 
 
 def printlog(s):
@@ -166,7 +166,7 @@ def main():
     skip = args['skip']
     if skip > 0:
         printlog(f"   skipping the first: {skip} questions")
-        
+
     if args['textstats']:  # calculate text statistics like reading levels
         sentences = 0
         syllables = 0
@@ -178,7 +178,7 @@ def main():
         linsearWrite = 0.0
         daleChall = 0.0
         # textStandard = 0.0
-        
+
         for i in range(len(law['data'])):
             if i < skip:
                 continue  # skip first --skip=n questions for validating new
@@ -208,15 +208,15 @@ def main():
                  f"sentences and {syllables} syllables")
         printlog("                Flesch Reading Ease: "
                  f"{fleschReadingEase / i:.1f} (Very Confusing)")
-        printlog("         Flesch-Kincaid Grade Level: "        
+        printlog("         Flesch-Kincaid Grade Level: "
                  f"{fleschGradeLevel / i:.1f}")
         printlog("            Gunning FOG Grade Level: "
                  f"{gunningFOG / i:.1f}")
-        printlog("  Automated Readability Grade Level: "        
+        printlog("  Automated Readability Grade Level: "
                  f"{autoReadability / i:.1f}")
-        printlog("           Coleman-Liau Grade Level: "        
+        printlog("           Coleman-Liau Grade Level: "
                  f"{colemanLiau / i:.1f}")
-        printlog("          Linsear Write Grade Level: "        
+        printlog("          Linsear Write Grade Level: "
                  f"{linsearWrite / i:.1f}")
         printlog(f"             Dale-Chall Grade Level: {daleChall / i:.1f}")
         meanGradeLevel = (fleschGradeLevel + gunningFOG + autoReadability +
@@ -234,7 +234,7 @@ def main():
         noAnswerCorrect = 0     # number of "no answer" questions correct
         exactMatch = 0
         totalF1 = 0.0
-        
+
         if args['pyprof']:
             printlog("enabling pyprof profiling")
             pyprof.init()  # initializes PyProf
@@ -276,7 +276,7 @@ def main():
                 if sep > 4:  # remove [CLS] ... [SEP]
                     AlbertAnswer = AlbertAnswer[(sep + 5):].strip()
             goldAnswers = [answer['text'] for answer
-                       in law['data'][i]['answers'] if answer['text']]
+                           in law['data'][i]['answers'] if answer['text']]
             if not goldAnswers:
                 goldAnswers = ['']
 
@@ -303,13 +303,14 @@ def main():
                 printlog(f"ALBERT: {AlbertAnswer}")
                 printlog(f"answer: {goldAnswers}")
                 printlog(f"context: {context}")
-        
+
         if args['pyprof']:
             profiler.stop()
         i -= skip
         i += 1  # first ? is index 0
         printlog("")
-        printlog(f"{exactMatch}/{i} exact matches = {exactMatch / i * 100:.2f}%")
+        printlog(f"{exactMatch}/{i} exact matches = "
+                 "{exactMatch / i * 100:.2f}%")
         printlog(f"F1 = {totalF1 / i * 100:.2f}%")
         printlog(f"{noAnswerCorrect}/{noAnswerCount} correct \"no answers\" = "
                  f"{noAnswerCorrect / noAnswerCount * 100:.2f}%")
@@ -323,7 +324,7 @@ def main():
     elapsedTime = int(round(time.time() * 1000)) - startTime
     if args['textstats']:
         printlog(f"elapsed text statistical analysis time {elapsedTime} ms")
-        printlog(f"{elapsedTime / i / 1000:.3f} seconds per question")  
+        printlog(f"{elapsedTime / i / 1000:.3f} seconds per question")
     else:
         printlog(f"elapsed answering time: {elapsedTime} ms")
         printlog(f"{elapsedTime / i / 1000:.3f} seconds per question")
