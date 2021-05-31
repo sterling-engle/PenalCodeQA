@@ -59,6 +59,7 @@ def printlog(s):
 
 
 def printlogFile(s):
+    print(s)
     if logFile is not None:
         print(s, file=logFile)
 
@@ -230,10 +231,10 @@ def getTextStats(law, skip):
     return i, skip, startTime
 
 
-def getAnswers(logFileName, lawFileName, skip):
-    global logFile  # output file for printlog(s)
-    logFile = open(logFileName, "a")
-    printProcessInfo("function getAnswers")
+def getAnswers(lawFileName, skip):
+    # global logFile  # output file for printlog(s)
+    # logFile = open(logFileName, "a")
+    # printProcessInfo("function getAnswers")
     printlogFile("AutoModelForQuestionAnswering with ALBERT xLarge "
                  "pretrained on SQuAD2.0 by ktrapeznikov")
     printlogFile("Reading CA Penal Code Q&A JSON sorted by section "
@@ -255,15 +256,11 @@ def getAnswers(logFileName, lawFileName, skip):
         torch.cuda.synchronize()
     tokenizer = AutoTokenizer.from_pretrained(
             "ktrapeznikov/albert-xlarge-v2-squad-v2")
-    tokenizerSize = get_size(tokenizer)
-    printlogFile(f"tokensize size: {tokenizerSize} bytes")
     model = AutoModelForQuestionAnswering.from_pretrained(
             "ktrapeznikov/albert-xlarge-v2-squad-v2")
-    modelSize = get_size(model)
-    printlogFile(f" model size CPU: {modelSize} bytes")
+    # modelSize = get_size(model)
+    # printlogFile(f" model size CPU: {modelSize} bytes")
     model.to(device)        # run on GPU if available
-    modelSize = get_size(model)
-    printlogFile(f"after to device: {modelSize} bytes")
     printMemory()
     noAnswerCount = 0       # number of questions that have no answer
     noAnswerCorrect = 0     # number of "no answer" questions correct
@@ -350,8 +347,8 @@ def getAnswers(logFileName, lawFileName, skip):
     printlogFile(f"elapsed answering time: {elapsedTime} ms")
     printlogFile(f"{elapsedTime / i / 1000:.4f} seconds per question")
     printMemory()
-    if logFile is not None:
-        logFile.close()
+    # if logFile is not None:
+    #    logFile.close()
     # return (len(law['data']) - 1), skip, noAnswerCount, noAnswerCorrect, \
     #       exactMatch, totalF1, startTime
     return
@@ -422,6 +419,8 @@ def main():
                      "\"has answer\" exact matches = "
                      f"{(exactMatch - noAnswerCorrect) / (i - noAnswerCount) * 100:.2f}%")
         """
+        """
+        # MP not used
         p1 = mp.Process(target=getAnswers, args=("child1of2-4.log",
                                                  "CalPenalCodeQA.json",
                                                  skip))
@@ -432,6 +431,8 @@ def main():
         p2.start()
         p1.join()  # waits for p1 to finish
         p2.join()
+        """
+        getAnswers("CalPenalCodeQAbatch.json", skip)
 
     if device == "cuda":
         torch.cuda.synchronize()
