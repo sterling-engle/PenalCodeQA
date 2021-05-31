@@ -241,6 +241,7 @@ def main():
             profiler.start()
         for i in range(len(law['data'])):
             if i < skip:
+                startTime = int(round(time.time() * 1000))  # time in ms
                 continue  # skip first --skip=n questions for validating new
             entry = law['data'][i]
             question = entry['question']
