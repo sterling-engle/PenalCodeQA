@@ -38,6 +38,7 @@ References:
 """
 
 import multiprocessing as mp
+import sys
 import os
 import torch
 import time
@@ -80,6 +81,29 @@ def printMemory():
         printlog(f"  reserved GPU memory: {reservedGPU}")
         printlog(f" allocated GPU memory: {allocatedGPU}")
         printlog(f"      free GPU memory: {freeGPU}")
+
+
+# From https://goshippo.com/blog/measure-real-size-any-python-object/
+# Recursively finds size of objects
+def get_size(obj, seen=None):
+    size = sys.getsizeof(obj)
+    if seen is None:
+        seen = set()
+    obj_id = id(obj)
+    if obj_id in seen:
+        return 0
+    # Important mark as seen *before* entering recursion to gracefully handle
+    # self-referential objects
+    seen.add(obj_id)
+    if isinstance(obj, dict):
+        size += sum([get_size(v, seen) for v in obj.values()])
+        size += sum([get_size(k, seen) for k in obj.keys()])
+    elif hasattr(obj, '__dict__'):
+        size += get_size(obj.__dict__, seen)
+    elif hasattr(obj, '__iter__') and not isinstance(obj, (str, bytes,
+                                                           bytearray)):
+        size += sum([get_size(i, seen) for i in obj])
+    return size
 
 
 # these functions are based upon the HF squad_metrics.py script
@@ -206,7 +230,7 @@ def getTextStats(law, skip):
     return i, skip, startTime
 
 
-def getAnswers(logFileName, law, skip):
+def getAnswers(logFileName, lawFileName, skip):
     global logFile  # output file for printlog(s)
     logFile = open(logFileName, "a")
     printProcessInfo("function getAnswers")
@@ -214,6 +238,12 @@ def getAnswers(logFileName, law, skip):
                  "pretrained on SQuAD2.0 by ktrapeznikov")
     printlogFile("Reading CA Penal Code Q&A JSON sorted by section "
                  "including unanswerables")
+
+    lawFile = open(lawFileName, "r")
+    law = json.load(lawFile)  # returns a dictionary
+    lawFile.close()
+    lawSize = get_size(law)
+    printlogFile(f"law size: {lawSize} bytes")
 
     # Can we use Cuda to run faster on a GPU or just use the slower CPU?
     device = "cuda" if torch.cuda.is_available() else "cpu"  # [2] line 22
@@ -225,9 +255,15 @@ def getAnswers(logFileName, law, skip):
         torch.cuda.synchronize()
     tokenizer = AutoTokenizer.from_pretrained(
             "ktrapeznikov/albert-xlarge-v2-squad-v2")
+    tokenizerSize = get_size(tokenizer)
+    printlogFile(f"tokensize size: {tokenizerSize} bytes")
     model = AutoModelForQuestionAnswering.from_pretrained(
             "ktrapeznikov/albert-xlarge-v2-squad-v2")
+    modelSize = get_size(model)
+    printlogFile(f" model size CPU: {modelSize} bytes")
     model.to(device)        # run on GPU if available
+    modelSize = get_size(model)
+    printlogFile(f"after to device: {modelSize} bytes")
     printMemory()
     noAnswerCount = 0       # number of questions that have no answer
     noAnswerCorrect = 0     # number of "no answer" questions correct
@@ -386,9 +422,11 @@ def main():
                      "\"has answer\" exact matches = "
                      f"{(exactMatch - noAnswerCorrect) / (i - noAnswerCount) * 100:.2f}%")
         """
-        p1 = mp.Process(target=getAnswers, args=("child1of2-2.log", law,
+        p1 = mp.Process(target=getAnswers, args=("child1of2-4.log",
+                                                 "CalPenalCodeQA.json",
                                                  skip))
-        p2 = mp.Process(target=getAnswers, args=("child2of2-2.log", law,
+        p2 = mp.Process(target=getAnswers, args=("child2of2-4.log",
+                                                 "CalPenalCodeQA.json",
                                                  skip))
         p1.start()
         p2.start()
