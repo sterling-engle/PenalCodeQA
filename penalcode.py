@@ -312,7 +312,7 @@ def main():
         i += 1  # first ? is index 0
         printlog("")
         printlog(f"{exactMatch}/{i} exact matches = "
-                 "{exactMatch / i * 100:.2f}%")
+                 f"{exactMatch / i * 100:.2f}%")
         printlog(f"F1 = {totalF1 / i * 100:.2f}%")
         printlog(f"{noAnswerCorrect}/{noAnswerCount} correct \"no answers\" = "
                  f"{noAnswerCorrect / noAnswerCount * 100:.2f}%")
