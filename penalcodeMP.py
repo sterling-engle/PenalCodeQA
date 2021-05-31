@@ -38,6 +38,7 @@ References:
 """
 
 import multiprocessing as mp
+import os
 import torch
 import time
 import argparse  # command-line parsing library
@@ -54,6 +55,18 @@ def printlog(s):
     print(s)
     if logFile is not None:
         print(s, file=logFile)
+
+
+def printlogFile(s):
+    if logFile is not None:
+        print(s, file=logFile)
+
+
+def printProcessInfo(title):
+    printlog(title)
+    printlog(f"module name: {__name__}")
+    printlog(f"parent process: {os.getppid()}")
+    printlog(f"process id: {os.getpid()}")
 
 
 # prints GPU memory usage and availability [4]
@@ -193,13 +206,29 @@ def getTextStats(law, skip):
     return i, skip, startTime
 
 
-def getAnswers(law, skip):
+def getAnswers(logFileName, law, skip):
+    global logFile  # output file for printlog(s)
+    logFile = open(logFileName, "a")
+    printProcessInfo("function getAnswers")
+    printlogFile("AutoModelForQuestionAnswering with ALBERT xLarge "
+                 "pretrained on SQuAD2.0 by ktrapeznikov")
+    printlogFile("Reading CA Penal Code Q&A JSON sorted by section "
+                 "including unanswerables")
+
+    # Can we use Cuda to run faster on a GPU or just use the slower CPU?
     device = "cuda" if torch.cuda.is_available() else "cpu"  # [2] line 22
+    printlogFile(f"           running on: {device}")
+    printMemory()
+
+    # record start time
+    if device == "cuda":
+        torch.cuda.synchronize()
     tokenizer = AutoTokenizer.from_pretrained(
             "ktrapeznikov/albert-xlarge-v2-squad-v2")
     model = AutoModelForQuestionAnswering.from_pretrained(
             "ktrapeznikov/albert-xlarge-v2-squad-v2")
     model.to(device)        # run on GPU if available
+    printMemory()
     noAnswerCount = 0       # number of questions that have no answer
     noAnswerCorrect = 0     # number of "no answer" questions correct
     exactMatch = 0
@@ -216,7 +245,7 @@ def getAnswers(law, skip):
             continue
         id = entry['id']
         if id != i:
-            printlog(f"WARNING: ? {i} JSON ID {id} mismatch.")
+            printlogFile(f"WARNING: ? {i} JSON ID {id} mismatch.")
 
         context = entry['context']
         input_dict = tokenizer.encode_plus(question, context,
@@ -224,8 +253,8 @@ def getAnswers(law, skip):
         tokenCount = input_dict['input_ids'].size(1)
         if tokenCount > 512:
             skip += 1
-            printlog(f"? {i} ERROR: context longer than 512 tokens "
-                     f"({tokenCount}) - skipped: {context}")
+            printlogFile(f"? {i} ERROR: context longer than 512 tokens "
+                         f"({tokenCount}) - skipped: {context}")
             continue
         input_dict.to(device)   # run on GPU if available
         modelOutput = model(**input_dict)
@@ -256,22 +285,40 @@ def getAnswers(law, skip):
             if goldAnswers == ['']:  # no answer was the correct answer
                 noAnswerCount += 1
                 noAnswerCorrect += 1
-            printlog(f"EM ? {i}: {question}")
-            printlog(f"ALBERT: {AlbertAnswer}")
-            # printlog(f"answer: {goldAnswers}")
-            # printlog(f"context: {context}")
+            printlogFile(f"EM ? {i}: {question}")
+            printlogFile(f"ALBERT: {AlbertAnswer}")
         else:  # print F1, golden answers and context when not an EM
             f1 = max((compute_f1(AlbertAnswer, answer))
                      for answer in goldAnswers)
             totalF1 += f1
             if goldAnswers == ['']:  # no answer was the correct answer
                 noAnswerCount += 1
-            printlog(f"F1 {f1} ? {i}: {question}")
-            printlog(f"ALBERT: {AlbertAnswer}")
-            printlog(f"answer: {goldAnswers}")
-            printlog(f"context: {context}")
-    return (len(law['data']) - 1), skip, noAnswerCount, noAnswerCorrect, \
-        exactMatch, totalF1, startTime
+            printlogFile(f"F1 {f1} ? {i}: {question}")
+            printlogFile(f"ALBERT: {AlbertAnswer}")
+            printlogFile(f"answer: {goldAnswers}")
+            printlogFile(f"context: {context}")
+    elapsedTime = int(round(time.time() * 1000)) - startTime
+    i -= skip
+    i += 1  # first ? is index 0
+    printlogFile("")
+    printlogFile(f"{exactMatch}/{i} exact matches = "
+                 f"{exactMatch / i * 100:.2f}%")
+    printlogFile(f"F1 = {totalF1 / i * 100:.2f}%")
+    printlogFile(f"{noAnswerCorrect}/{noAnswerCount} "
+                 "correct \"no answers\" = "
+                 f"{noAnswerCorrect / noAnswerCount * 100:.2f}%")
+    if (i - noAnswerCount) > 0:
+        printlogFile(f"{exactMatch - noAnswerCorrect}/{i - noAnswerCount} "
+                     "\"has answer\" exact matches = "
+                     f"{(exactMatch - noAnswerCorrect) / (i - noAnswerCount) * 100:.2f}%")
+    printlogFile(f"elapsed answering time: {elapsedTime} ms")
+    printlogFile(f"{elapsedTime / i / 1000:.4f} seconds per question")
+    printMemory()
+    if logFile is not None:
+        logFile.close()
+    # return (len(law['data']) - 1), skip, noAnswerCount, noAnswerCorrect, \
+    #       exactMatch, totalF1, startTime
+    return
 
 
 def main():
@@ -322,6 +369,7 @@ def main():
     if args['textstats']:  # calculate text statistics like reading levels
         i, skip, startTime = getTextStats(law, skip)
     else:
+        """
         i, skip, noAnswerCount, noAnswerCorrect, exactMatch, totalF1, \
             startTime = getAnswers(law, skip)
         i -= skip
@@ -337,9 +385,19 @@ def main():
             printlog(f"{exactMatch - noAnswerCorrect}/{i - noAnswerCount} "
                      "\"has answer\" exact matches = "
                      f"{(exactMatch - noAnswerCorrect) / (i - noAnswerCount) * 100:.2f}%")
+        """
+        p1 = mp.Process(target=getAnswers, args=("child1of2-2.log", law,
+                                                 skip))
+        p2 = mp.Process(target=getAnswers, args=("child2of2-2.log", law,
+                                                 skip))
+        p1.start()
+        p2.start()
+        p1.join()  # waits for p1 to finish
+        p2.join()
 
     if device == "cuda":
         torch.cuda.synchronize()
+
     elapsedTime = int(round(time.time() * 1000)) - startTime
 
     if args['textstats']:
@@ -347,7 +405,8 @@ def main():
         printlog(f"{elapsedTime / i / 1000:.4f} seconds per question")
     else:
         printlog(f"elapsed answering time: {elapsedTime} ms")
-        printlog(f"{elapsedTime / i / 1000:.4f} seconds per question")
+        # printlog(f"{elapsedTime / i / 1000:.4f} seconds per question")
+
     printMemory()
     if logFile is not None:
         logFile.close()
